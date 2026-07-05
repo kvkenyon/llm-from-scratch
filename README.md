@@ -1,3 +1,4 @@
-build LLM from scratch
+Build LLM from scratch
 
-starting with byte pair encoding
+1. Starting with byte pair encoding with pre-tokenization and incremental updates. [DONE]
+2. Train BPE tokenizer on tiny stories dataset
