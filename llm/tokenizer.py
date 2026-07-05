@@ -1,5 +1,5 @@
 import os
-from collections import Counter
+from collections import Counter, defaultdict
 from functools import partial
 from itertools import batched, pairwise
 from multiprocessing import Pool
@@ -8,6 +8,8 @@ from typing import BinaryIO
 import regex as re
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
+DEBUG = False
 
 
 def init_vocabulary(special_tokens: list[str]) -> dict[int, bytes]:
@@ -28,18 +30,24 @@ def assert_no_special_characters(pretokens):
 def tokenize(
     input_path: str, vocab_size: int, special_tokens: list[str]
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-    pretokens = pretokenize(input_path, special_tokens)
+    pretoken_counts = pretokenize(input_path, special_tokens)
     vocab = init_vocabulary(special_tokens)
 
     merges = []
 
-    while len(vocab) < vocab_size:
-        counts = Counter()
-        for pretoken, count in pretokens.items():
-            for x, y in pairwise(pretoken):
-                counts[(x, y)] += count
+    pretokens = [(pretoken, count) for pretoken, count in pretoken_counts.items()]
 
-        freq = counts.most_common()
+    byte_pair_cache = defaultdict(set)
+
+    byte_pair_freq = Counter()
+    for i, (pretoken, count) in enumerate(pretokens):
+        for x, y in pairwise(pretoken):
+            byte_pair = (x, y)
+            byte_pair_freq[byte_pair] += count
+            byte_pair_cache[byte_pair].add(i)
+
+    while len(vocab) < vocab_size:
+        freq = byte_pair_freq.most_common()
 
         max_token, highest_count = freq[0]
         tied = [max_token]
@@ -51,23 +59,70 @@ def tokenize(
         merge = tied_sorted[-1]
         merges.append(merge)
 
-        new_pretokens = []
-        for pretoken, count in pretokens.items():
-            if len(pretoken) <= 1:
-                continue
-            new_pretoken = merge_tokens(pretoken, merge)
-            if new_pretoken:
-                new_pretoken = tuple(new_pretoken)
-                if pretoken == new_pretoken:
-                    continue
-                new_pretokens.append((pretoken, new_pretoken))
-        for old_pretoken, new_pretoken in new_pretokens:
-            pretokens[new_pretoken] = pretokens[old_pretoken]
-            del pretokens[old_pretoken]
+        for pid in list(byte_pair_cache[merge]):
+            pretoken, count = pretokens[pid]
+            i = 1
+            if DEBUG:
+                locs = find_byte_pair(pretoken, merge)
+                if not locs:
+                    raise ValueError(f"byte pair {merge} not found in {pretoken}")
 
+            new_pretoken = update_pretoken(pid, pretoken, count, merge, byte_pair_freq, byte_pair_cache)
+            pretokens[pid] = (tuple(new_pretoken), count)
+
+        del byte_pair_cache[merge]
+        del byte_pair_freq[merge]
         vocab[len(vocab)] = merge[0] + merge[1]
 
     return vocab, merges
+
+
+def find_byte_pair(pretoken: list[bytes, ...], merge: tuple[bytes, bytes]) -> list[int]:
+    i = 1
+    locs = []
+    while i < len(pretoken):
+        x, y = pretoken[i - 1], pretoken[i]
+        if (x, y) == merge:
+            locs.append(i - 1)
+        i += 1
+    return locs
+
+
+def update_pretoken(
+    pid: int,
+    pretoken: tuple[bytes, ...],
+    pretoken_freq: int,
+    merge: tuple[bytes, bytes],
+    byte_pair_freq,
+    byte_pair_cache,
+):
+    # pretoken [B, A, A, B, A], merge = [A,A]
+
+    # [B, AA, B, A]
+    new_pretoken = merge_tokens(pretoken, merge)
+
+    # [B_A, A_A, A_B, B_A]
+    old_pairs = Counter([(a, b) for a, b in pairwise(pretoken)])
+    # [B_AA, AA_B, B_A]
+    new_pairs = Counter([(a, b) for a, b in pairwise(new_pretoken)])
+
+    # old_pairs = {B_A:2, A_A:1, A_B:1}
+    # new_pairs = {B_A:1, A_A:0 ,A_B:0, B_AA: 1, AA_B: 1}
+
+    # {B_A: 1, A_A: 1, A_B: 1, B_AA: -1, AA_B: -1}
+    old_pairs.subtract(new_pairs)
+
+    for byte_pair, delta in old_pairs.items():
+        if byte_pair == merge:
+            continue
+        byte_pair_freq[byte_pair] += pretoken_freq * delta * -1
+
+        if byte_pair not in new_pairs:
+            byte_pair_cache[byte_pair].remove(pid)
+        else:
+            byte_pair_cache[byte_pair].add(pid)
+
+    return new_pretoken
 
 
 def merge_tokens(pretoken, merge):
