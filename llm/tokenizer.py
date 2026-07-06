@@ -47,16 +47,8 @@ def tokenize(
             byte_pair_cache[byte_pair].add(i)
 
     while len(vocab) < vocab_size:
-        freq = byte_pair_freq.most_common()
+        merge = max(byte_pair_freq, key=lambda k: (byte_pair_freq[k], k))
 
-        max_token, highest_count = freq[0]
-        tied = [max_token]
-        for token, count in freq[1:]:
-            if count != highest_count:
-                break
-            tied.append(token)
-        tied_sorted = sorted(tied)
-        merge = tied_sorted[-1]
         merges.append(merge)
 
         for pid in list(byte_pair_cache[merge]):

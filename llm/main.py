@@ -13,16 +13,12 @@ def main():
     start_time = time.perf_counter()
     vocab, merges = tokenize(str(filepath), vocab_size=10000, special_tokens=["<|endoftext|>"])
     end_time = time.perf_counter()
-
     elapsed_time = end_time - start_time
     print(f"Execution time: {elapsed_time:.6f} seconds")
 
     assert len(vocab) == 10_000, "Vocab not sized right"
 
     vocab_serial = make_vocab_serializable(vocab)
-    import pprint
-
-    pprint.pprint(vocab_serial)
 
     serialized = json.dumps(vocab_serial)
 
