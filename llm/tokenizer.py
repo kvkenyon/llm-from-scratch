@@ -6,7 +6,9 @@ from multiprocessing import Pool
 from typing import BinaryIO
 
 import regex as re
+from tqdm import tqdm
 
+NUM_PROCESSES = 4
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
 DEBUG = False
@@ -46,25 +48,27 @@ def tokenize(
             byte_pair_freq[byte_pair] += count
             byte_pair_cache[byte_pair].add(i)
 
-    while len(vocab) < vocab_size:
-        merge = max(byte_pair_freq, key=lambda k: (byte_pair_freq[k], k))
+    with tqdm(total=vocab_size - len(vocab), desc="tokenize") as pbar:
+        while len(vocab) < vocab_size:
+            merge = max(byte_pair_freq, key=lambda k: (byte_pair_freq[k], k))
 
-        merges.append(merge)
+            merges.append(merge)
 
-        for pid in list(byte_pair_cache[merge]):
-            pretoken, count = pretokens[pid]
-            i = 1
-            if DEBUG:
-                locs = find_byte_pair(pretoken, merge)
-                if not locs:
-                    raise ValueError(f"byte pair {merge} not found in {pretoken}")
+            for pid in list(byte_pair_cache[merge]):
+                pretoken, count = pretokens[pid]
+                i = 1
+                if DEBUG:
+                    locs = find_byte_pair(pretoken, merge)
+                    if not locs:
+                        raise ValueError(f"byte pair {merge} not found in {pretoken}")
 
-            new_pretoken = update_pretoken(pid, pretoken, count, merge, byte_pair_freq, byte_pair_cache)
-            pretokens[pid] = (tuple(new_pretoken), count)
+                new_pretoken = update_pretoken(pid, pretoken, count, merge, byte_pair_freq, byte_pair_cache)
+                pretokens[pid] = (tuple(new_pretoken), count)
 
-        del byte_pair_cache[merge]
-        del byte_pair_freq[merge]
-        vocab[len(vocab)] = merge[0] + merge[1]
+            del byte_pair_cache[merge]
+            del byte_pair_freq[merge]
+            vocab[len(vocab)] = merge[0] + merge[1]
+            pbar.update(1)
 
     return vocab, merges
 
@@ -133,50 +137,50 @@ def merge_tokens(pretoken, merge):
     return new_pretoken
 
 
-def pretokenize(input_path: str, special_tokens: list[str], desired_num_chunks=4):
+def pretokenize(filepath: str, special_tokens: list[str], desired_num_chunks=12):
     assert special_tokens, f"Require one special token to split the corpus into {desired_num_chunks}"
     assert desired_num_chunks > 0, "desired_num_chunks must be positive"
-    with open(input_path, "rb") as f:
-        num_processes = 4
+    with open(filepath, "rb") as f:
         boundaries = find_chunk_boundaries(f, desired_num_chunks, special_tokens[0].encode("utf-8"))
         bounds = zip(boundaries[:-1], boundaries[1:])
-        chunks = [_get_chunk(f, bound) for bound in bounds]
-        f = partial(_pretokenize, special_tokens=special_tokens)
-        with Pool(num_processes) as pool:
-            counters = pool.map(f, chunks)
+        fn = partial(_pretokenize, filepath=filepath, special_tokens=special_tokens)
+        with Pool(NUM_PROCESSES) as pool:
+            counters = pool.map(fn, list(bounds))
         pretokens = Counter()
         for counter in counters:
             pretokens += counter
     return pretokens
 
 
-def _pretokenize(chunk: str, pat: str = PAT, special_tokens: list[str] | None = None):
+def _pretokenize(bound: tuple[int, int], filepath: str, pat: str = PAT, special_tokens: list[str] | None = None):
     counts = Counter()
 
     def _pretokenize_subchunk(subchunk: str):
         for batch in batched(re.finditer(pat, subchunk), 10):
             counts.update([tuple([bytes([b]) for b in m.group().encode("utf-8")]) for m in batch])
 
-    if special_tokens:
-        subchunks = _split_chunk(chunk, special_tokens)
-        for subchunk in subchunks:
-            _pretokenize_subchunk(subchunk)
-    else:
-        _pretokenize_subchunk(chunk)
+    with open(filepath, "rb") as f:
+        chunk = _get_chunk(f, bound)
+        if special_tokens:
+            subchunks = _split_chunk(chunk, special_tokens)
+            for subchunk in subchunks:
+                _pretokenize_subchunk(subchunk)
+        else:
+            _pretokenize_subchunk(chunk)
 
     return counts
 
 
-def _get_chunk(f, bound):
+def _get_chunk(f: BinaryIO, bound: tuple[int, int]):
     start, end = bound
     f.seek(start)
     return f.read(end - start).decode("utf-8", errors="ignore")
 
 
-def _split_chunk(chunk: str, special_tokens: list[str]) -> str:
+def _split_chunk(chunk: str, special_tokens: list[str]):
     escaped_special_tokens = [re.escape(special_token) for special_token in special_tokens]
     pattern = "|".join(escaped_special_tokens)
-    return re.split(pattern, chunk)
+    return re.splititer(pattern, chunk)
 
 
 def find_chunk_boundaries(
