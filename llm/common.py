@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 
 
@@ -49,3 +50,26 @@ def gpt2_bytes_to_unicode() -> dict[int, str]:
     characters = [chr(n) for n in cs]
     d = dict(zip(bs, characters))
     return d
+
+
+def load_merges(merges_filepath: str):
+    gpt2_byte_decoder = {v: k for k, v in gpt2_bytes_to_unicode().items()}
+    with open(merges_filepath, encoding="utf-8") as f:
+        gpt2_merges = [tuple(line.rstrip().split(" ")) for line in f if line != "\n"]
+        return [
+            (
+                bytes([gpt2_byte_decoder[token] for token in merge_token_1]),
+                bytes([gpt2_byte_decoder[token] for token in merge_token_2]),
+            )
+            for merge_token_1, merge_token_2 in gpt2_merges
+        ]
+
+
+def load_vocab(vocab_filepath: str):
+    gpt2_byte_decoder = {v: k for k, v in gpt2_bytes_to_unicode().items()}
+    with open(vocab_filepath, encoding="utf-8") as f:
+        gpt2_vocab = json.load(f)
+        return {
+            gpt2_vocab_index: bytes([gpt2_byte_decoder[token] for token in gpt2_vocab_item])
+            for gpt2_vocab_item, gpt2_vocab_index in gpt2_vocab.items()
+        }

@@ -8,6 +8,8 @@ from typing import BinaryIO
 import regex as re
 from tqdm import tqdm
 
+from .common import load_merges, load_vocab
+
 NUM_PROCESSES = 4
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -228,3 +230,18 @@ def find_chunk_boundaries(
 
     # Make sure all boundaries are unique, but might be fewer than desired_num_chunks
     return sorted(set(chunk_boundaries))
+
+
+class Tokenizer:
+    def __init__(
+        self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens: list[str] | None = None
+    ):
+        self.vocab = vocab
+        self.merges = merges
+        self.special_tokens = sepcial_tokens
+
+    @classmethod
+    def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens: list[str] = None) -> Tokenizer:
+        vocab = load_vocab(vocab_filepath)
+        merges = load_merges(merges_filepath)
+        return cls(vocab, merges, special_tokens)

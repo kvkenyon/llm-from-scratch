@@ -167,3 +167,4 @@ cython_debug/
 /llm/vocab.json
 /llm/vocab.json.bak
 /llm/profile.speedscope.json
+/llm/merges.txt

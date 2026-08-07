@@ -24,34 +24,11 @@ def run_train_bpe_owt():
 
     merges_nice = make_merges_readable(merges)
     with open("owt_train_merges.txt", "x") as f:
-        f.write(merges_nice)
+        f.write("\n".join(merges_nice))
 
 
 def main():
     run_train_bpe_owt()
-    # filepath = Path(__file__).parent.parent.resolve() / "data" / "TinyStoriesV2-GPT4-train.txt"
-    # # filepath = Path(__file__).parent.parent.resolve() / "data" / "corpus.en"
-    #
-    # start_time = time.perf_counter()
-    # vocab, merges = tokenize(str(filepath), vocab_size=10000, special_tokens=["<|endoftext|>"])
-    # end_time = time.perf_counter()
-    # elapsed_time = end_time - start_time
-    # print(f"Execution time: {elapsed_time:.6f} seconds")
-    #
-    # assert len(vocab) == 10_000, "Vocab not sized right"
-    #
-    # vocab_serial = make_vocab_serializable(vocab)
-    #
-    # serialized = json.dumps(vocab_serial)
-    #
-    # with open("vocab.json", "x") as f:
-    #     f.write(serialized)
-    #
-    # merges_nice = make_merges_readable(merges)
-    # with open("merges.txt", "x") as f:
-    #     f.write(merges_nice)
-    #
-    #
 
 
 def bytes_to_readable(bs: bytes) -> str:
