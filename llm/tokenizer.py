@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from collections import Counter, defaultdict
 from functools import partial
@@ -237,11 +239,81 @@ class Tokenizer:
         self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens: list[str] | None = None
     ):
         self.vocab = vocab
+        self.inv_vocab = {v: i for i, v in self.vocab.items()}
+
+        # append special tokens to vocab
+        max_id = max(self.vocab, key=self.vocab.get)
+        next_id = max_id + 1
+        for st in special_tokens or []:
+            st_utf8 = st.encode("utf-8")
+            if st_utf8 not in self.inv_vocab:
+                self.vocab[next_id] = st_utf8
+                self.inv_vocab[st_utf8] = next_id
+                next_id += 1
+
         self.merges = merges
-        self.special_tokens = sepcial_tokens
+        self.special_tokens = special_tokens if special_tokens is not None else []
 
     @classmethod
     def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens: list[str] = None) -> Tokenizer:
         vocab = load_vocab(vocab_filepath)
         merges = load_merges(merges_filepath)
         return cls(vocab, merges, special_tokens)
+
+    def encode(self, text: str):
+        pretokens = self._pretokenize(text)
+
+        def naive_match(pretoken, merges):
+            for merge in merges:
+                for i in range(1, len(pretoken)):
+                    byte_pair = (pretoken[i - 1], pretoken[i])
+                    if merge == byte_pair:
+                        return merge
+            return None
+
+        results = []
+        for pretoken in pretokens:
+            if pretoken in self.special_tokens:
+                results.append(self.inv_vocab[pretoken.encode("utf-8")])
+                continue
+            while (merged := naive_match(pretoken, self.merges)) is not None:
+                pretoken = merge_tokens(pretoken, merged)
+
+            for token in pretoken:
+                results.append(self.inv_vocab[token])
+
+        return results
+
+    def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
+        for text in iterable:
+            yield from self.encode(text)
+
+    def decode(self, ids: list[int]) -> str:
+        result = b"".join([self.vocab[id] for id in ids])
+        return result.decode("utf-8", "replace")
+
+    def _pretokenize(self, text: str) -> list[tuple[bytes, ...]]:
+        results = []
+        chunks = text
+        if self.special_tokens:
+            chunks = self._split_text(text)
+            for chunk in chunks:
+                if chunk in self.special_tokens:
+                    results.append(chunk)
+                    continue
+                for batch in batched(re.finditer(PAT, chunk), 10):
+                    pretokens = [tuple([bytes([b]) for b in m.group().encode("utf-8")]) for m in batch]
+                    results.extend(pretokens)
+            return results
+
+        for batch in batched(re.finditer(PAT, text), 10):
+            pretokens = [tuple([bytes([b]) for b in m.group().encode("utf-8")]) for m in batch]
+            results.extend(pretokens)
+        return results
+
+    def _split_text(self, text: str):
+        escaped = [re.escape(st) for st in self.special_tokens]
+        sorted_escaped = sorted(escaped, key=len, reverse=True)
+        pattern = "|".join(sorted_escaped)
+        pattern = f"({pattern})"
+        return [chunk for chunk in re.split(pattern, text) if chunk]

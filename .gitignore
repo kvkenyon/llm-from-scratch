@@ -13,8 +13,7 @@ __pycache__/
 build/
 develop-eggs/
 dist/
-downloads/
-eggs/
+downloads/ eggs/
 .eggs/
 lib/
 lib64/
@@ -168,3 +167,5 @@ cython_debug/
 /llm/vocab.json.bak
 /llm/profile.speedscope.json
 /llm/merges.txt
+
+*.bak

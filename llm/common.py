@@ -65,10 +65,12 @@ def load_merges(merges_filepath: str):
         ]
 
 
-def load_vocab(vocab_filepath: str):
+def load_vocab(vocab_filepath: str, is_gpt2_2=False):
     gpt2_byte_decoder = {v: k for k, v in gpt2_bytes_to_unicode().items()}
     with open(vocab_filepath, encoding="utf-8") as f:
         gpt2_vocab = json.load(f)
+        if not is_gpt2_2:
+            return gpt2_vocab
         return {
             gpt2_vocab_index: bytes([gpt2_byte_decoder[token] for token in gpt2_vocab_item])
             for gpt2_vocab_item, gpt2_vocab_index in gpt2_vocab.items()
