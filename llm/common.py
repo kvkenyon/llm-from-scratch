@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 
+import numpy as np
+
 
 @lru_cache
 def gpt2_bytes_to_unicode() -> dict[int, str]:
@@ -75,3 +77,13 @@ def load_vocab(vocab_filepath: str, is_gpt2_2=False):
             gpt2_vocab_index: bytes([gpt2_byte_decoder[token] for token in gpt2_vocab_item])
             for gpt2_vocab_item, gpt2_vocab_index in gpt2_vocab.items()
         }
+
+
+def serialize_token_ids(filepath: str, token_ids: list[int]):
+    with open(filepath, "wb") as f:
+        np.save(f, token_ids)
+
+
+def deserialize_token_ids(filepath):
+    with open(filepath, "rb"):
+        return np.load(filepath)

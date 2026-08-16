@@ -6,7 +6,7 @@ from llm.common import gpt2_bytes_to_unicode
 from llm.tokenizer import Tokenizer, tokenize
 
 
-def stream_dataset(filepath: str, split_on: str = "<|endoftext|>", chunk_size: int = 65_536):
+def stream_dataset(filepath: Path, split_on: str = "<|endoftext|>", chunk_size: int = 65_536):
     with open(filepath, encoding="utf-8") as f:
         buffer = ""
         while True:
@@ -56,8 +56,8 @@ def tokenizer_compression_ratio(tokenizer: Tokenizer, dataset: str):
     return comp_ratios
 
 
-def main(dataset: str, vocab_size: int, special_tokens: list[str] | None = ["<|endoftext|>"]):
-
+def main(dataset: str, vocab_size: int, special_tokens: list[str] | None = None):
+    special_tokens = ["<|endoftext|>"] if not special_tokens else special_tokens
     filepath = Path(__file__).parent.parent.resolve() / "data" / dataset
     start_time = time.perf_counter()
 

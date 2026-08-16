@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import itertools
 import os
 from collections import Counter, defaultdict
+from collections.abc import Iterable, Iterator
 from functools import partial
 from itertools import batched, pairwise
 from multiprocessing import Pool
@@ -27,7 +29,7 @@ def init_vocabulary(special_tokens: list[str]) -> dict[int, bytes]:
 
 def assert_no_special_characters(pretokens):
     invalid_bytes = [b.encode("utf-8") for b in "<|>"]
-    for pretoken, _ in pretokens.items():
+    for pretoken in pretokens:
         for pt in pretoken:
             if pt in invalid_bytes:
                 assert False, f"illegal char for {pt}"
@@ -60,11 +62,6 @@ def tokenize(
 
             for pid in list(byte_pair_cache[merge]):
                 pretoken, count = pretokens[pid]
-                i = 1
-                if DEBUG:
-                    locs = find_byte_pair(pretoken, merge)
-                    if not locs:
-                        raise ValueError(f"byte pair {merge} not found in {pretoken}")
 
                 new_pretoken = update_pretoken(pid, pretoken, count, merge, byte_pair_freq, byte_pair_cache)
                 pretokens[pid] = (tuple(new_pretoken), count)
@@ -77,7 +74,7 @@ def tokenize(
     return vocab, merges
 
 
-def find_byte_pair(pretoken: list[bytes, ...], merge: tuple[bytes, bytes]) -> list[int]:
+def find_byte_pair(pretoken: list[bytes], merge: tuple[bytes, bytes]) -> list[int]:
     i = 1
     locs = []
     while i < len(pretoken):
@@ -146,7 +143,7 @@ def pretokenize(filepath: str, special_tokens: list[str], desired_num_chunks=12)
     assert desired_num_chunks > 0, "desired_num_chunks must be positive"
     with open(filepath, "rb") as f:
         boundaries = find_chunk_boundaries(f, desired_num_chunks, special_tokens[0].encode("utf-8"))
-        bounds = zip(boundaries[:-1], boundaries[1:])
+        bounds = itertools.pairwise(boundaries)
         fn = partial(_pretokenize, filepath=filepath, special_tokens=special_tokens)
         with Pool(NUM_PROCESSES) as pool:
             counters = pool.map(fn, list(bounds))
@@ -242,7 +239,7 @@ class Tokenizer:
         self.inv_vocab = {v: i for i, v in self.vocab.items()}
 
         # append special tokens to vocab
-        max_id = max(self.vocab, key=self.vocab.get)
+        max_id = max(self.vocab, key=self.vocab.get)  # type: ignore
         next_id = max_id + 1
         for st in special_tokens or []:
             st_utf8 = st.encode("utf-8")
@@ -255,7 +252,9 @@ class Tokenizer:
         self.special_tokens = special_tokens if special_tokens is not None else []
 
     @classmethod
-    def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens: list[str] = None) -> Tokenizer:
+    def from_files(
+        cls, vocab_filepath: str, merges_filepath: str, special_tokens: list[str] | None = None
+    ) -> Tokenizer:
         vocab = load_vocab(vocab_filepath, True)
         merges = load_merges(merges_filepath)
         return cls(vocab, merges, special_tokens)
@@ -294,7 +293,6 @@ class Tokenizer:
 
     def _pretokenize(self, text: str) -> list[tuple[bytes, ...]]:
         results = []
-        chunks = text
         if self.special_tokens:
             chunks = self._split_text(text)
             for chunk in chunks:
