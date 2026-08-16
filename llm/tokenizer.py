@@ -256,7 +256,7 @@ class Tokenizer:
 
     @classmethod
     def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens: list[str] = None) -> Tokenizer:
-        vocab = load_vocab(vocab_filepath)
+        vocab = load_vocab(vocab_filepath, True)
         merges = load_merges(merges_filepath)
         return cls(vocab, merges, special_tokens)
 
