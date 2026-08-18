@@ -3,57 +3,7 @@ import time
 from pathlib import Path
 
 from llm.common import gpt2_bytes_to_unicode
-from llm.tokenizer import Tokenizer, tokenize
-
-
-def stream_dataset(filepath: Path, split_on: str = "<|endoftext|>", chunk_size: int = 65_536):
-    with open(filepath, encoding="utf-8") as f:
-        buffer = ""
-        while True:
-            chunk = f.read(chunk_size)
-
-            if not chunk:
-                break
-
-            buffer += chunk
-
-            parts = buffer.split(split_on)
-
-            for part in parts[:-1]:
-                doc = part.strip()
-                if doc:
-                    yield doc
-
-            buffer = parts[-1]
-
-        final_doc = buffer.strip()
-        if final_doc:
-            yield final_doc
-
-
-def tokenizer_compression_ratio(tokenizer: Tokenizer, dataset: str):
-    # bytes / token
-
-    filepath = Path(__file__).parent.parent.resolve() / "data" / dataset
-
-    samples = []
-
-    for i, sample in enumerate(stream_dataset(filepath)):
-        if i == 10:
-            break
-        samples.append(sample)
-
-    encoded = []
-    for sample in samples:
-        encoded_sample = tokenizer.encode(sample)
-        encoded.append(encoded_sample)
-
-    comp_ratios = []
-    for tokens, original in zip(encoded, samples):
-        comp_ratio = len(original.encode("utf-8")) / len(tokens)
-        comp_ratios.append(comp_ratio)
-
-    return comp_ratios
+from llm.tokenizer import tokenize
 
 
 def main(dataset: str, vocab_size: int, special_tokens: list[str] | None = None):

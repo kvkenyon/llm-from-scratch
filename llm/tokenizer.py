@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import itertools
 import os
+import statistics
+import sys
+import time
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
 from functools import partial
 from itertools import batched, pairwise
 from multiprocessing import Pool
+from pathlib import Path
 from typing import BinaryIO
 
 import regex as re
 from tqdm import tqdm
 
-from .common import load_merges, load_vocab
+from .common import load_merges, load_vocab, stream_dataset
 
 NUM_PROCESSES = 4
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -249,6 +253,9 @@ class Tokenizer:
                 next_id += 1
 
         self.merges = merges
+
+        self.merges_index = {m: i for i, m in enumerate(merges)}
+
         self.special_tokens = special_tokens if special_tokens is not None else []
 
     @classmethod
@@ -259,23 +266,24 @@ class Tokenizer:
         merges = load_merges(merges_filepath)
         return cls(vocab, merges, special_tokens)
 
+    def _find_next_merge(self, pretoken) -> tuple[bytes, bytes] | None:
+        next_merge_idx = sys.maxsize
+        for i in range(1, len(pretoken)):
+            byte_pair = (pretoken[i - 1], pretoken[i])
+            if byte_pair in self.merges_index:
+                candidate_idx = self.merges_index[byte_pair]
+                next_merge_idx = min(candidate_idx, next_merge_idx)
+        return self.merges[next_merge_idx] if next_merge_idx != sys.maxsize else None
+
     def encode(self, text: str):
         pretokens = self._pretokenize(text)
-
-        def naive_match(pretoken, merges):
-            for merge in merges:
-                for i in range(1, len(pretoken)):
-                    byte_pair = (pretoken[i - 1], pretoken[i])
-                    if merge == byte_pair:
-                        return merge
-            return None
 
         results = []
         for pretoken in pretokens:
             if pretoken in self.special_tokens:
                 results.append(self.inv_vocab[pretoken.encode("utf-8")])
                 continue
-            while (merged := naive_match(pretoken, self.merges)) is not None:
+            while (merged := self._find_next_merge(pretoken)) is not None:
                 pretoken = merge_tokens(pretoken, merged)
 
             for token in pretoken:
@@ -315,3 +323,106 @@ class Tokenizer:
         pattern = "|".join(sorted_escaped)
         pattern = f"({pattern})"
         return [chunk for chunk in re.split(pattern, text) if chunk]
+
+
+def tokenizer_compression_ratio(tokenizer: Tokenizer, dataset: str):
+    # bytes / token
+
+    filepath = Path(__file__).parent.parent.resolve() / "data" / dataset
+
+    samples = []
+
+    for i, sample in enumerate(stream_dataset(filepath)):
+        if i == 10:
+            break
+        samples.append(sample)
+
+    encoded = []
+    for sample in samples:
+        encoded_sample = tokenizer.encode(sample)
+        encoded.append(encoded_sample)
+
+    comp_ratios = []
+    for tokens, original in zip(encoded, samples):
+        comp_ratio = len(original.encode("utf-8")) / len(tokens)
+        comp_ratios.append(comp_ratio)
+
+    return comp_ratios
+
+
+def load_benchmark_sample(dataset: str, target_bytes: int = 10 * 1024**2):
+    filepath = Path("data") / dataset
+    samples = []
+    total_bytes = 0
+
+    for text in stream_dataset(filepath):
+        samples.append(text)
+        total_bytes += len(text.encode("utf-8"))
+
+        if total_bytes >= target_bytes:
+            break
+
+    return samples, total_bytes
+
+
+def benchmark_tokenizer(
+    tokenizer,
+    dataset: str,
+    target_bytes: int = 10 * 1024**2,
+    min_run_seconds: float = 1.0,
+    runs: int = 5,
+    show_progress: bool = True,
+):
+    samples, sample_bytes = load_benchmark_sample(dataset, target_bytes)
+
+    if not samples:
+        raise ValueError(f"No samples found in data/{dataset}")
+
+    # A small warm-up avoids encoding the entire (potentially slow) sample twice.
+    tokenizer.encode(samples[0])
+    sample_sizes = [(text, len(text.encode("utf-8"))) for text in samples]
+
+    results = []
+    total_token_count = 0
+
+    with tqdm(
+        total=runs * sample_bytes,
+        desc="Benchmarking encode",
+        unit="B",
+        unit_scale=True,
+        disable=not show_progress,
+    ) as pbar:
+        for run in range(runs):
+            processed_bytes = 0
+            token_count = 0
+            elapsed = 0.0
+
+            while True:
+                for text, text_bytes in sample_sizes:
+                    start = time.perf_counter()
+                    token_count += len(tokenizer.encode(text))
+                    elapsed += time.perf_counter() - start
+                    processed_bytes += text_bytes
+                    pbar.update(text_bytes)
+
+                if elapsed >= min_run_seconds:
+                    break
+
+                # This run needs another pass to reach the minimum duration.
+                pbar.total += sample_bytes
+                pbar.refresh()
+
+            rate = processed_bytes / elapsed
+            results.append(rate)
+            total_token_count += token_count
+            pbar.set_postfix(run=run + 1, MiB_s=f"{rate / 1024**2:.2f}")
+
+    median_rate = statistics.median(results)
+
+    return {
+        "sample_mib": sample_bytes / 1024**2,
+        "bytes_per_second": median_rate,
+        "mib_per_second": median_rate / 1024**2,
+        "runs_mib_per_second": [rate / 1024**2 for rate in results],
+        "tokens_processed": total_token_count,
+    }

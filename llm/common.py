@@ -2,8 +2,34 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
+
+
+def stream_dataset(filepath: Path, split_on: str = "<|endoftext|>", chunk_size: int = 65_536):
+    with open(filepath, encoding="utf-8") as f:
+        buffer = ""
+        while True:
+            chunk = f.read(chunk_size)
+
+            if not chunk:
+                break
+
+            buffer += chunk
+
+            parts = buffer.split(split_on)
+
+            for part in parts[:-1]:
+                doc = part.strip()
+                if doc:
+                    yield doc
+
+            buffer = parts[-1]
+
+        final_doc = buffer.strip()
+        if final_doc:
+            yield final_doc
 
 
 @lru_cache
