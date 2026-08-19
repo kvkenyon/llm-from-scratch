@@ -13,3 +13,14 @@ class Linear(torch.nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x @ self.W.T
+
+
+class Embedding(torch.nn.Module):
+    def __init__(self, num_embedings: int, embedding_dim: int, device=None, dtype=None):
+        super().__init__()
+        embeddings = torch.empty(num_embedings, embedding_dim, device=device, dtype=dtype)
+        torch.nn.init.trunc_normal_(embeddings, mean=0.0, std=1.0, a=-3.0, b=3.0)
+        self.embeddings = torch.nn.Parameter(embeddings)
+
+    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        return self.embeddings[token_ids]
