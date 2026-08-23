@@ -40,7 +40,7 @@ def assert_no_special_characters(pretokens):
 
 
 def tokenize(
-    input_path: str, vocab_size: int, special_tokens: list[str]
+    input_path: str | os.PathLike, vocab_size: int, special_tokens: list[str]
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     pretoken_counts = pretokenize(input_path, special_tokens)
     vocab = init_vocabulary(special_tokens)
@@ -142,7 +142,7 @@ def merge_tokens(pretoken, merge):
     return new_pretoken
 
 
-def pretokenize(filepath: str, special_tokens: list[str], desired_num_chunks=12):
+def pretokenize(filepath: str | os.PathLike, special_tokens: list[str], desired_num_chunks=12):
     assert special_tokens, f"Require one special token to split the corpus into {desired_num_chunks}"
     assert desired_num_chunks > 0, "desired_num_chunks must be positive"
     with open(filepath, "rb") as f:
@@ -157,7 +157,7 @@ def pretokenize(filepath: str, special_tokens: list[str], desired_num_chunks=12)
     return pretokens
 
 
-def _pretokenize(bound: tuple[int, int], filepath: str, pat: str = PAT, special_tokens: list[str] | None = None):
+def _pretokenize(bound: tuple[int, int], filepath: str | os.PathLike, pat: str = PAT, special_tokens: list[str] | None = None):
     counts = Counter()
 
     def _pretokenize_subchunk(subchunk: str):

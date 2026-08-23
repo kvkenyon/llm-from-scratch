@@ -9,7 +9,7 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-from llm.nn import Embedding, Linear, RMSNorm, SwiGLU, RotaryPositionalEmbedding, softmax
+from llm.nn import Embedding, Linear, RMSNorm, SwiGLU, RotaryPositionalEmbedding, softmax, scaled_dot_product_attention
 from llm.tokenizer import Tokenizer, tokenize
 
 
@@ -104,7 +104,7 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    return scaled_dot_product_attention(Q, K, V, mask)
 
 
 def run_multihead_self_attention(
@@ -592,4 +592,4 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    return tokenize(input_path, vocab_size, special_tokens)
+    return tokenize(input_path, vocab_size, special_tokens, **kwargs)

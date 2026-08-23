@@ -4,11 +4,19 @@ from torch import Tensor
 from einops import rearrange
 
 def softmax(x: torch.Tensor, dim=-1) -> torch.Tensor:
-    # TODO(Kevin): Implement softmax with numerical stability stability
-    # subtracting the largest element in x from all elements making the largest
-    # element 0.
     x_stable = x - torch.max(x, dim=dim , keepdim=True)[0]
     return torch.exp(x_stable)/torch.sum(torch.exp(x_stable), dim=dim, keepdim=True)
+
+def scaled_dot_product_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, m: torch.Tensor | None = None) -> torch.Tensor:
+    k_transpose = rearrange(k, "... seq_len d_k -> ... d_k seq_len")
+    pre_softmax_attn = (q @ k_transpose / torch.sqrt(torch.tensor(q.shape[-1])))
+    if m is not None:
+        diff = q.ndim - m.ndim
+        new_shape = (1,) * diff + m.shape
+        m = torch.reshape(m, new_shape)
+        pre_softmax_attn[m == False] += float('-inf')
+    attn = softmax(pre_softmax_attn, dim=-1)
+    return attn @ v
 
 class Linear(torch.nn.Module):
     def __init__(
