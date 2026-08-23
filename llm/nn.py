@@ -1,6 +1,7 @@
 import torch
 from jaxtyping import Float
 from torch import Tensor
+from einops import rearrange
 
 
 class Linear(torch.nn.Module):
@@ -70,3 +71,34 @@ class SwiGLU(torch.nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self._swiglu(x)
+
+class RotaryPositionalEmbedding(torch.nn.Module):
+    def __init__(self, theta: float, d_k:int,  max_seq_len: int, device: torch.device | None = None):
+        super().__init__()
+        cosines = []
+        sines = []
+        for i in range(1, max_seq_len + 1):
+            for k in range(1, (d_k // 2) + 1):
+                theta_i_k = torch.tensor(i) / (theta ** ((2.*k - 2.) / d_k))
+                cos = torch.cos(theta_i_k)
+                sin = torch.sin(theta_i_k)
+                cosines.extend([cos, cos])
+                sines.extend([-sin, sin])
+
+        cosines = torch.tensor(cosines, device=device)
+        sines = torch.tensor(sines, device=device)
+
+        self.cosines = rearrange(cosines, "(seq_len d_k) -> seq_len d_k", d_k=d_k)
+        self.sines = rearrange(sines, "(seq_len d_k) -> seq_len d_k", d_k=d_k)
+
+    def forward(self, q: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+        cosines = torch.index_select(self.cosines, dim=-2, index=token_positions)
+        sines = torch.index_select(self.sines, dim=-2, index=token_positions)
+
+
+        q_a = rearrange(q, '... seq_len (k two) -> ... seq_len k two', two=2)
+        q_b = q_a.flip(-1)
+        q_interleaved = rearrange(q_b, '... seq_len k two -> ... seq_len (k two)')
+
+        return q * cosines + (q_interleaved * sines)
+

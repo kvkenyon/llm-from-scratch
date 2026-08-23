@@ -9,7 +9,7 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-from llm.nn import Embedding, Linear, RMSNorm, SwiGLU
+from llm.nn import Embedding, Linear, RMSNorm, SwiGLU, RotaryPositionalEmbedding
 from llm.tokenizer import Tokenizer, tokenize
 
 
@@ -200,7 +200,8 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len)
+    return rope(in_query_or_key, token_positions)
 
 
 def run_transformer_block(
