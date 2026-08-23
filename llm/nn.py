@@ -3,6 +3,12 @@ from jaxtyping import Float
 from torch import Tensor
 from einops import rearrange
 
+def softmax(x: torch.Tensor, dim=-1) -> torch.Tensor:
+    # TODO(Kevin): Implement softmax with numerical stability stability
+    # subtracting the largest element in x from all elements making the largest
+    # element 0.
+    x_stable = x - torch.max(x, dim=dim , keepdim=True)[0]
+    return torch.exp(x_stable)/torch.sum(torch.exp(x_stable), dim=dim, keepdim=True)
 
 class Linear(torch.nn.Module):
     def __init__(
