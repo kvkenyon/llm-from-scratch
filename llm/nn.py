@@ -77,7 +77,7 @@ class RotaryPositionalEmbedding(torch.nn.Module):
         super().__init__()
         cosines = []
         sines = []
-        for i in range(1, max_seq_len + 1):
+        for i in range(0, max_seq_len):
             for k in range(1, (d_k // 2) + 1):
                 theta_i_k = torch.tensor(i) / (theta ** ((2.*k - 2.) / d_k))
                 cos = torch.cos(theta_i_k)
