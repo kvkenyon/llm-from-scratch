@@ -169,3 +169,4 @@ cython_debug/
 /llm/merges.txt
 
 *.bak
+owt.npy
