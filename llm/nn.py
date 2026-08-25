@@ -116,3 +116,12 @@ class RotaryPositionalEmbedding(torch.nn.Module):
 
         return q * cosines + (q_interleaved * sines)
 
+class CausalMultiHeadAttention(torch.nn.Module):
+    def __init__(self, num_heads: int, d_model: int):
+        super().__init__()
+        d_v = d_k = d_model // num_heads 
+        Wq = torch.randn(1, num_heads*d_k, d_model)
+        Wk = torch.randn(1, num_heads*d_k, d_model)
+        Wv = torch.randn(1, num_heads*d_v, d_model)
+
+        
