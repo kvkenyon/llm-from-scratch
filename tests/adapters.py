@@ -9,7 +9,16 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-from llm.nn import Embedding, Linear, RMSNorm, SwiGLU, RotaryPositionalEmbedding, softmax, scaled_dot_product_attention, CausalMultiHeadAttention
+from llm.nn import (
+    CausalMultiHeadAttention,
+    Embedding,
+    Linear,
+    RMSNorm,
+    RotaryPositionalEmbedding,
+    SwiGLU,
+    scaled_dot_product_attention,
+    softmax,
+)
 from llm.tokenizer import Tokenizer, tokenize
 
 
@@ -139,7 +148,9 @@ def run_multihead_self_attention(
         implementation with the given QKV projection weights and input features.
     """
     multihead_attention = CausalMultiHeadAttention(num_heads, d_model)
-    multihead_attention.load_state_dict({"Wq": q_proj_weight, "Wk": k_proj_weight, "Wv": v_proj_weight, "Wo": o_proj_weight})
+    multihead_attention.load_state_dict(
+        {"Wq": q_proj_weight, "Wk": k_proj_weight, "Wv": v_proj_weight, "Wo": o_proj_weight}
+    )
     return multihead_attention(in_features)
 
 
@@ -180,7 +191,13 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_model"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    multihead_attention = CausalMultiHeadAttention(
+        num_heads, d_model, with_rope=True, theta=theta, max_seq_len=max_seq_len
+    )
+    multihead_attention.load_state_dict(
+        {"Wq": q_proj_weight, "Wk": k_proj_weight, "Wv": v_proj_weight, "Wo": o_proj_weight}
+    )
+    return multihead_attention(in_features, token_positions)
 
 
 def run_rope(

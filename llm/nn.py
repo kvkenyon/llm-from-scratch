@@ -1,24 +1,30 @@
 import torch
+from einops import rearrange
 from jaxtyping import Float
 from torch import Tensor
-from einops import rearrange
 
-def init_linear_weights(weights: torch.Tensor, in_features:int, out_features:int) -> torch.nn.Parameter:
+
+def init_linear_weights(weights: torch.Tensor, in_features: int, out_features: int) -> torch.nn.Parameter:
     std = 2 / (in_features + out_features)
     torch.nn.init.trunc_normal_(weights, mean=0.0, std=std, a=-3 * std, b=3 * std)
     return torch.nn.Parameter(weights)
 
-def softmax(x: torch.Tensor, dim=-1) -> torch.Tensor:
-    x_stable = x - torch.max(x, dim=dim , keepdim=True)[0]
-    return torch.exp(x_stable)/torch.sum(torch.exp(x_stable), dim=dim, keepdim=True)
 
-def scaled_dot_product_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, m: torch.Tensor | None = None) -> torch.Tensor:
+def softmax(x: torch.Tensor, dim=-1) -> torch.Tensor:
+    x_stable = x - torch.max(x, dim=dim, keepdim=True)[0]
+    return torch.exp(x_stable) / torch.sum(torch.exp(x_stable), dim=dim, keepdim=True)
+
+
+def scaled_dot_product_attention(
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, m: torch.Tensor | None = None
+) -> torch.Tensor:
     k_transpose = rearrange(k, "... seq_len d_k -> ... d_k seq_len")
-    pre_softmax_attn = (q @ k_transpose / torch.sqrt(torch.tensor(q.shape[-1])))
+    pre_softmax_attn = q @ k_transpose / torch.sqrt(torch.tensor(q.shape[-1]))
     if m is not None:
-        pre_softmax_attn.masked_fill_(~m, float('-inf'))
+        pre_softmax_attn.masked_fill_(~m, float("-inf"))
     attn = softmax(pre_softmax_attn, dim=-1)
     return attn @ v
+
 
 class Linear(torch.nn.Module):
     def __init__(
@@ -46,11 +52,12 @@ class Embedding(torch.nn.Module):
 
 
 class RMSNorm(torch.nn.Module):
-    def __init__(self, d_model: int, eps: float = 1e-5, device=None, dtype=None):
+    def __init__(self, d_model: int, eps: float = 1e-5, device=None):
         super().__init__()
 
         self.eps = eps
         self.d_model = d_model
+        self.device = device
 
         self.gain = torch.nn.Parameter(torch.ones(d_model))
 
@@ -88,14 +95,15 @@ class SwiGLU(torch.nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self._swiglu(x)
 
+
 class RotaryPositionalEmbedding(torch.nn.Module):
-    def __init__(self, theta: float, d_k:int,  max_seq_len: int, device: torch.device | None = None):
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device: torch.device | None = None):
         super().__init__()
         cosines = []
         sines = []
-        for i in range(0, max_seq_len):
+        for i in range(max_seq_len):
             for k in range(1, (d_k // 2) + 1):
-                theta_i_k = torch.tensor(i) / (theta ** ((2.*k - 2.) / d_k))
+                theta_i_k = torch.tensor(i) / (theta ** ((2.0 * k - 2.0) / d_k))
                 cos = torch.cos(theta_i_k)
                 sin = torch.sin(theta_i_k)
                 cosines.extend([cos, cos])
@@ -108,28 +116,49 @@ class RotaryPositionalEmbedding(torch.nn.Module):
         self.sines = rearrange(sines, "(seq_len d_k) -> seq_len d_k", d_k=d_k)
 
     def forward(self, q: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+        # TODO(kevin): Figure out how to apply batched indeces
         cosines = torch.index_select(self.cosines, dim=-2, index=token_positions)
         sines = torch.index_select(self.sines, dim=-2, index=token_positions)
 
-
-        q_a = rearrange(q, '... seq_len (k two) -> ... seq_len k two', two=2)
+        q_a = rearrange(q, "... seq_len (k two) -> ... seq_len k two", two=2)
         q_b = q_a.flip(-1)
-        q_interleaved = rearrange(q_b, '... seq_len k two -> ... seq_len (k two)')
+        q_interleaved = rearrange(q_b, "... seq_len k two -> ... seq_len (k two)")
 
         return q * cosines + (q_interleaved * sines)
 
+
 class CausalMultiHeadAttention(torch.nn.Module):
-    def __init__(self, num_heads: int, d_model: int):
+    def __init__(
+        self,
+        num_heads: int,
+        d_model: int,
+        *,
+        with_rope: bool = False,
+        theta: float | None = None,
+        max_seq_len: int | None = None,
+        device: torch.device | None = None,
+    ):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
-        self.d_v = self.d_k = d_model // num_heads 
+        self.d_v = self.d_k = d_model // num_heads
+
+        self.with_rope = with_rope
+        self.theta = theta
+        self.max_seq_len = max_seq_len
+
+        if self.with_rope:
+            assert self.theta is not None and self.max_seq_len is not None, "Invalid rope config"
+            self.rope = RotaryPositionalEmbedding(self.theta, self.d_k, self.max_seq_len, device)
+
+        self.device = device or torch.device("cpu")
+
         self.Wq = init_linear_weights(torch.empty(d_model, d_model), d_model, d_model)
         self.Wk = init_linear_weights(torch.empty(d_model, d_model), d_model, d_model)
         self.Wv = init_linear_weights(torch.empty(d_model, d_model), d_model, d_model)
         self.Wo = init_linear_weights(torch.empty(d_model, d_model), d_model, d_model)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
         seq_len = x.shape[-2]
         Wq = rearrange(self.Wq, "... dm1 dm2 -> ... dm2 dm1")
         Wk = rearrange(self.Wk, "... dm1 dm2 -> ... dm2 dm1")
@@ -144,9 +173,14 @@ class CausalMultiHeadAttention(torch.nn.Module):
         K = rearrange(K, "... seq_len (h d_k) -> ... h seq_len d_k", h=self.num_heads)
         V = rearrange(V, "... seq_len (h d_k) -> ... h seq_len d_k", h=self.num_heads)
 
+        if self.with_rope:
+            assert token_positions is not None, "no token positions"
+            # TODO(kevin): Figure out how to apply batched indeces
+            Q = self.rope(Q, token_positions[0])
+            K = self.rope(K, token_positions[0])
+
         mask = ~torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool), 1)
         attn = scaled_dot_product_attention(Q, K, V, mask)
-        attn = rearrange(attn, '... h seq_len d_k -> ... seq_len (h d_k)')
+        attn = rearrange(attn, "... h seq_len d_k -> ... seq_len (h d_k)")
+
         return attn @ Wo
-
-
