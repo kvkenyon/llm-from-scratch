@@ -3,6 +3,11 @@ from jaxtyping import Float
 from torch import Tensor
 from einops import rearrange
 
+def init_linear_weights(weights: torch.Tensor, in_features:int, out_features:int) -> torch.nn.Parameter:
+    std = 2 / (in_features + out_features)
+    torch.nn.init.trunc_normal_(weights, mean=0.0, std=std, a=-3 * std, b=3 * std)
+    return torch.nn.Parameter(weights)
+
 def softmax(x: torch.Tensor, dim=-1) -> torch.Tensor:
     x_stable = x - torch.max(x, dim=dim , keepdim=True)[0]
     return torch.exp(x_stable)/torch.sum(torch.exp(x_stable), dim=dim, keepdim=True)
@@ -11,10 +16,7 @@ def scaled_dot_product_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tens
     k_transpose = rearrange(k, "... seq_len d_k -> ... d_k seq_len")
     pre_softmax_attn = (q @ k_transpose / torch.sqrt(torch.tensor(q.shape[-1])))
     if m is not None:
-        diff = q.ndim - m.ndim
-        new_shape = (1,) * diff + m.shape
-        m = torch.reshape(m, new_shape)
-        pre_softmax_attn[m == False] += float('-inf')
+        pre_softmax_attn.masked_fill_(~m, float('-inf'))
     attn = softmax(pre_softmax_attn, dim=-1)
     return attn @ v
 
@@ -119,9 +121,32 @@ class RotaryPositionalEmbedding(torch.nn.Module):
 class CausalMultiHeadAttention(torch.nn.Module):
     def __init__(self, num_heads: int, d_model: int):
         super().__init__()
-        d_v = d_k = d_model // num_heads 
-        Wq = torch.randn(1, num_heads*d_k, d_model)
-        Wk = torch.randn(1, num_heads*d_k, d_model)
-        Wv = torch.randn(1, num_heads*d_v, d_model)
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_v = self.d_k = d_model // num_heads 
+        self.Wq = init_linear_weights(torch.empty(d_model, d_model), d_model, d_model)
+        self.Wk = init_linear_weights(torch.empty(d_model, d_model), d_model, d_model)
+        self.Wv = init_linear_weights(torch.empty(d_model, d_model), d_model, d_model)
+        self.Wo = init_linear_weights(torch.empty(d_model, d_model), d_model, d_model)
 
-        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        seq_len = x.shape[-2]
+        Wq = rearrange(self.Wq, "... dm1 dm2 -> ... dm2 dm1")
+        Wk = rearrange(self.Wk, "... dm1 dm2 -> ... dm2 dm1")
+        Wv = rearrange(self.Wv, "... dm1 dm2 -> ... dm2 dm1")
+        Wo = rearrange(self.Wo, "... dm1 dm2 -> ... dm2 dm1")
+
+        Q = x @ Wq
+        K = x @ Wk
+        V = x @ Wv
+
+        Q = rearrange(Q, "... seq_len (h d_k) -> ... h seq_len d_k", h=self.num_heads)
+        K = rearrange(K, "... seq_len (h d_k) -> ... h seq_len d_k", h=self.num_heads)
+        V = rearrange(V, "... seq_len (h d_k) -> ... h seq_len d_k", h=self.num_heads)
+
+        mask = ~torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool), 1)
+        attn = scaled_dot_product_attention(Q, K, V, mask)
+        attn = rearrange(attn, '... h seq_len d_k -> ... seq_len (h d_k)')
+        return attn @ Wo
+
+
