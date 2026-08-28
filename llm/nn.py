@@ -112,9 +112,8 @@ class RotaryPositionalEmbedding(torch.nn.Module):
         self.sines = rearrange(sines, "(seq_len d_k) -> seq_len d_k", d_k=d_k)
 
     def forward(self, q: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
-        # TODO(kevin): Figure out how to apply batched indeces
-        cosines = torch.index_select(self.cosines, dim=-2, index=token_positions)
-        sines = torch.index_select(self.sines, dim=-2, index=token_positions)
+        cosines = self.cosines[token_positions]
+        sines = self.sines[token_positions]
 
         q_a = rearrange(q, "... seq_len (k two) -> ... seq_len k two", two=2)
         q_b = q_a.flip(-1)
@@ -168,9 +167,8 @@ class CausalMultiHeadAttention(torch.nn.Module):
 
         if self.with_rope:
             assert token_positions is not None, "no token positions"
-            # TODO(kevin): Figure out how to apply batched indeces
-            Q = self.rope(Q, token_positions[0])
-            K = self.rope(K, token_positions[0])
+            Q = self.rope(Q, token_positions)
+            K = self.rope(K, token_positions)
 
         mask = ~torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool), 1)
         attn = scaled_dot_product_attention(Q, K, V, mask)
