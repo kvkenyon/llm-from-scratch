@@ -34,10 +34,11 @@ class Linear(torch.nn.Module):
         weights = torch.empty(out_features, in_features, device=device, dtype=dtype)
         std = 2 / (in_features + out_features)
         torch.nn.init.trunc_normal_(weights, mean=0.0, std=std, a=-3 * std, b=3 * std)
-        self.W = torch.nn.Parameter(weights)
+        self.weight = torch.nn.Parameter(weights)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x @ self.W.T
+        W = rearrange(self.weight, "... out_features in_features -> ... in_features out_features")
+        return x @ W
 
 
 class Embedding(torch.nn.Module):
@@ -59,15 +60,19 @@ class RMSNorm(torch.nn.Module):
         self.d_model = d_model
         self.device = device
 
-        self.gain = torch.nn.Parameter(torch.ones(d_model))
+        self.weight = torch.nn.Parameter(torch.ones(d_model))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # (batch_size, seq_len, d_model)
         in_dtype = x.dtype
         x = x.to(dtype=torch.float32)
         rms = torch.sqrt(torch.mean(x.square(), dim=-1, keepdim=True) + self.eps)
-        result = x.div(rms) * self.gain
+        result = x.div(rms) * self.weight
         return result.to(in_dtype)
+
+
+def silu(x: torch.Tensor) -> torch.Tensor:
+    return x * torch.sigmoid(x)
 
 
 class SwiGLU(torch.nn.Module):
@@ -75,22 +80,13 @@ class SwiGLU(torch.nn.Module):
         super().__init__()
 
         d_ff = 8 // 3 * d_model if not d_ff else d_ff
-        w1: Float[Tensor, " d_ff d_model"] = torch.empty(d_ff, d_model)
-        w2: Float[Tensor, " d_model d_ff"] = torch.empty(d_model, d_ff)
-        w3: Float[Tensor, " d_ff d_model"] = torch.empty(d_ff, d_model)
-        std = 2 / (d_ff + d_model)
-        torch.nn.init.trunc_normal_(w1, mean=0.0, std=std, a=-3 * std, b=3 * std)
-        torch.nn.init.trunc_normal_(w2, mean=0.0, std=std, a=-3 * std, b=3 * std)
-        torch.nn.init.trunc_normal_(w3, mean=0.0, std=std, a=-3 * std, b=3 * std)
-        self.w1 = torch.nn.Parameter(w1)
-        self.w2 = torch.nn.Parameter(w2)
-        self.w3 = torch.nn.Parameter(w3)
+        self.w1 = Linear(d_model, d_ff) 
+        self.w2 = Linear(d_ff, d_model) 
+        self.w3 = Linear(d_model, d_ff)
 
-    def _silu(self, x: torch.Tensor) -> torch.Tensor:
-        return x * torch.sigmoid(x)
 
     def _swiglu(self, x: torch.Tensor) -> torch.Tensor:
-        return (self._silu(x @ self.w1.T) * (x @ self.w3.T)) @ self.w2.T
+        return self.w2(silu(self.w1(x)) * (self.w3(x)))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self._swiglu(x)
@@ -153,21 +149,18 @@ class CausalMultiHeadAttention(torch.nn.Module):
 
         self.device = device or torch.device("cpu")
 
-        self.Wq = init_linear_weights(torch.empty(d_model, d_model), d_model, d_model)
-        self.Wk = init_linear_weights(torch.empty(d_model, d_model), d_model, d_model)
-        self.Wv = init_linear_weights(torch.empty(d_model, d_model), d_model, d_model)
-        self.Wo = init_linear_weights(torch.empty(d_model, d_model), d_model, d_model)
+
+        self.q_proj = Linear(d_model, d_model)
+        self.k_proj = Linear(d_model, d_model)
+        self.v_proj = Linear(d_model, d_model)
+        self.output_proj = Linear(d_model, d_model)
 
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
         seq_len = x.shape[-2]
-        Wq = rearrange(self.Wq, "... dm1 dm2 -> ... dm2 dm1")
-        Wk = rearrange(self.Wk, "... dm1 dm2 -> ... dm2 dm1")
-        Wv = rearrange(self.Wv, "... dm1 dm2 -> ... dm2 dm1")
-        Wo = rearrange(self.Wo, "... dm1 dm2 -> ... dm2 dm1")
 
-        Q = x @ Wq
-        K = x @ Wk
-        V = x @ Wv
+        Q = self.q_proj(x) 
+        K = self.k_proj(x) 
+        V = self.v_proj(x) 
 
         Q = rearrange(Q, "... seq_len (h d_k) -> ... h seq_len d_k", h=self.num_heads)
         K = rearrange(K, "... seq_len (h d_k) -> ... h seq_len d_k", h=self.num_heads)
@@ -183,4 +176,23 @@ class CausalMultiHeadAttention(torch.nn.Module):
         attn = scaled_dot_product_attention(Q, K, V, mask)
         attn = rearrange(attn, "... h seq_len d_k -> ... seq_len (h d_k)")
 
-        return attn @ Wo
+        return self.output_proj(attn) 
+
+class TransformerBlock(torch.nn.Module):
+    def __init__(self, d_model: int,
+                 num_heads: int,
+                 d_ff: int,
+                 *,
+                 theta: float | None = None, max_seq_len: int | None = None, device: torch.device | None = None):
+        super().__init__()
+        self.ln1 = RMSNorm(d_model, device=device)
+        self.ln2 = RMSNorm(d_model, device=device)
+        self.ffn = SwiGLU(d_model, d_ff)
+        self.attn = CausalMultiHeadAttention(num_heads, d_model, with_rope=True, theta=theta, max_seq_len=max_seq_len, device=device) 
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        pos_ids = torch.arange(0, x.shape[-2])
+        pos_ids = rearrange(pos_ids, "seq -> 1 seq")
+        x = x + self.attn(self.ln1(x), pos_ids) 
+        y = x + self.ffn(self.ln2(x))
+        return y
