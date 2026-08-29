@@ -1,6 +1,11 @@
 import torch
 from einops import rearrange
 
+"""
+MxN * NxP
+2N * M * P FLOPS
+"""
+
 
 def init_linear_weights(weights: torch.Tensor, in_features: int, out_features: int) -> torch.nn.Parameter:
     std = 2 / (in_features + out_features)
@@ -16,11 +21,18 @@ def softmax(x: torch.Tensor, dim=-1) -> torch.Tensor:
 def scaled_dot_product_attention(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, m: torch.Tensor | None = None
 ) -> torch.Tensor:
+    # FLOPS = 2*b*h*(2*d_k * seq_len * seq_len)
+
     k_transpose = rearrange(k, "... seq_len d_k -> ... d_k seq_len")
+
+    # (b h seq_len d_k) @ (b h d_k seq_len) -> (b h seq_len seq_len)
     pre_softmax_attn = q @ k_transpose / torch.sqrt(torch.tensor(q.shape[-1]))
     if m is not None:
         pre_softmax_attn.masked_fill_(~m, float("-inf"))
     attn = softmax(pre_softmax_attn, dim=-1)
+
+    # (... seq_len seq_len) @ (... seq_len d_k) -> (b h seq_len d_k)
+    # FLOPS = b * h * (2*seq_len * seq_len*d_k )
     return attn @ v
 
 
@@ -29,14 +41,18 @@ class Linear(torch.nn.Module):
         self, in_features: int, out_features: int, device: torch.device | None = None, dtype: torch.dtype | None = None
     ):
         super().__init__()
+        # W:   (out_features, in_features)
         weights = torch.empty(out_features, in_features, device=device, dtype=dtype)
         std = 2 / (in_features + out_features)
         torch.nn.init.trunc_normal_(weights, mean=0.0, std=std, a=-3 * std, b=3 * std)
         self.weight = torch.nn.Parameter(weights)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        W = rearrange(self.weight, "... out_features in_features -> ... in_features out_features")
-        return x @ W
+        # x:   (..., in_features)
+        # W.T: (in_features, out_features)
+        W_transpose = rearrange(self.weight, "... out_features in_features -> ... in_features out_features")
+        # y:   (..., out_features)
+        return x @ W_transpose
 
 
 class Embedding(torch.nn.Module):
@@ -77,15 +93,29 @@ class SwiGLU(torch.nn.Module):
     def __init__(self, d_model: int, d_ff: int | None = None):
         super().__init__()
 
+        # TODO(kevin): Round to closest multiple of 64
         d_ff = 8 // 3 * d_model if not d_ff else d_ff
+
         self.w1 = Linear(d_model, d_ff)
         self.w2 = Linear(d_ff, d_model)
         self.w3 = Linear(d_model, d_ff)
 
     def _swiglu(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch_size context_length d_model)
+        # w1_proj = self.w1(x)
+        # w1_proj: (batch_size context_length d_ff)
+        # w3_proj = self.w3(x)
+        # w3_proj: (batch_size context_length d_ff)
+        # silu_w1_proj = silu(w1_proj)
+        # silu_w1_proj = (batch_size context_length d_ff)
+        # glu = silu_w1_proj * w3_proj
+        # glu: (batch_size context_length d_ff)
+        # swiglu_out = self.w2(glu)
+        # swiglu_out: (batch_size context_length d_model)
         return self.w2(silu(self.w1(x)) * (self.w3(x)))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch_size context_length d_model)
         return self._swiglu(x)
 
 
@@ -151,9 +181,15 @@ class CausalMultiHeadAttention(torch.nn.Module):
         self.output_proj = Linear(d_model, d_model)
 
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
+        # x: (batch_size, context_length, d_model)
+        # FLOPS =  3 * (batch_size * (2 * d_model * context_length * d_model))
+        #        + 2 * batch_size * h * (2 * d_k * context_length * context_length)
+        #        +     batch_size * (2 * d_model * seq_len * d_model)
         seq_len = x.shape[-2]
 
+        # x: (batch_size context_length d_model)
         Q = self.q_proj(x)
+        # Q: (batch_size, context_length, d_model)
         K = self.k_proj(x)
         V = self.v_proj(x)
 
@@ -167,10 +203,14 @@ class CausalMultiHeadAttention(torch.nn.Module):
             K = self.rope(K, token_positions)
 
         mask = ~torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool), 1)
+        # Q,K,V: (batch_size num_heads context_length d_k)
         attn = scaled_dot_product_attention(Q, K, V, mask)
+        # attn: (batch_size num_heads context_length d_k)
         attn = rearrange(attn, "... h seq_len d_k -> ... seq_len (h d_k)")
-
-        return self.output_proj(attn)
+        # attn: (batch_size, context_length, d_model)
+        y = self.output_proj(attn)
+        # y: (batch_size context_length d_model)
+        return y 
 
 
 class TransformerBlock(torch.nn.Module):
@@ -193,9 +233,12 @@ class TransformerBlock(torch.nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch_size, context_length, d_model)
         pos_ids = torch.arange(0, x.shape[-2])
         pos_ids = rearrange(pos_ids, "seq -> 1 seq")
+
         x = x + self.attn(self.ln1(x), pos_ids)
+        # x: (batch_size context_length d_model)
         y = x + self.ffn(self.ln2(x))
         return y
 
@@ -214,16 +257,30 @@ class TransformerLanguageModel(torch.nn.Module):
         device: torch.device | None = None,
     ):
         super().__init__()
+        # in: (batch_size, context_length, )
         self.token_embeddings = Embedding(vocab_size, d_model)
+        # out: (batch_size, context_length, d_model)
         self.layers = torch.nn.Sequential()
         for _ in range(num_layers):
             self.layers.append(
+                # (batch_size, context_length, d_model)
                 TransformerBlock(d_model, num_heads, d_ff, theta=theta, max_seq_len=max_seq_len, device=device)
             )
         self.ln_final = RMSNorm(d_model, device=device)
         self.lm_head = Linear(d_model, vocab_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.token_embeddings(x)
-        x = self.layers(x)
-        return self.lm_head(self.ln_final(x))
+        """ Returns a batched, normalized probability distribution over the vocabulary where
+        the predicted distribution is over the next word for each input token.
+        """
+        # x: (batch_size, context_length)
+        e= self.token_embeddings(x)
+        # e: (batch_size, context_length, d_model)
+        attn = self.layers(e)
+        # attn: (batch_size, context_length, d_model)
+        attn_normalized = self.ln_final(attn)
+        # attn_normalized: (batch_size, context_length, d_model)
+        y = self.lm_head(attn_normalized)
+        # y: (batch_size, context_length, vocab_size)
+        return y
+
