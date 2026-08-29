@@ -157,7 +157,9 @@ def pretokenize(filepath: str | os.PathLike, special_tokens: list[str], desired_
     return pretokens
 
 
-def _pretokenize(bound: tuple[int, int], filepath: str | os.PathLike, pat: str = PAT, special_tokens: list[str] | None = None):
+def _pretokenize(
+    bound: tuple[int, int], filepath: str | os.PathLike, pat: str = PAT, special_tokens: list[str] | None = None
+):
     counts = Counter()
 
     def _pretokenize_subchunk(subchunk: str):
