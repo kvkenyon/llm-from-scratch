@@ -1,3 +1,6 @@
+import math
+from collections.abc import Callable
+
 import torch
 from einops import rearrange
 
@@ -290,3 +293,26 @@ class TransformerLanguageModel(torch.nn.Module):
         y = self.lm_head(attn_normalized)
         # y: (batch_size, context_length, vocab_size)
         return y
+
+
+class SGD(torch.optim.Optimizer):
+    def __init__(self, params, lr: float = 1e-3):
+        if lr < 0:
+            raise ValueError("lr must be greater than 0")
+
+        defaults = {"lr": lr}
+        super().__init__(params, defaults)
+
+    def step(self, closure: Callable | None = None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            lr = group["lr"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                t = state.get("t", 0)
+                grad = p.grad.data
+                p.data -= lr / math.sqrt(t + 1) * grad
+                state["t"] = t + 1
+        return loss
