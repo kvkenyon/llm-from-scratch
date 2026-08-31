@@ -1,11 +1,6 @@
 import torch
 from einops import rearrange
 
-"""
-MxN * NxP
-2N * M * P FLOPS
-"""
-
 
 def init_linear_weights(weights: torch.Tensor, in_features: int, out_features: int) -> torch.nn.Parameter:
     std = 2 / (in_features + out_features)
@@ -16,6 +11,18 @@ def init_linear_weights(weights: torch.Tensor, in_features: int, out_features: i
 def softmax(x: torch.Tensor, dim=-1) -> torch.Tensor:
     x_stable = x - torch.max(x, dim=dim, keepdim=True)[0]
     return torch.exp(x_stable) / torch.sum(torch.exp(x_stable), dim=dim, keepdim=True)
+
+
+def log_softmax(x: torch.Tensor) -> torch.Tensor:
+    x_stable = x - torch.max(x, dim=-1, keepdim=True)[0]
+    return x_stable - x_stable.exp().sum(-1).log().unsqueeze(-1)
+
+
+def cross_entropy(inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    log_probs = log_softmax(inputs)
+    targets = rearrange(targets, "batch_size -> batch_size 1")
+    log_probs = torch.gather(log_probs, -1, targets)
+    return -torch.mean(log_probs)
 
 
 def scaled_dot_product_attention(
@@ -210,7 +217,7 @@ class CausalMultiHeadAttention(torch.nn.Module):
         # attn: (batch_size, context_length, d_model)
         y = self.output_proj(attn)
         # y: (batch_size context_length d_model)
-        return y 
+        return y
 
 
 class TransformerBlock(torch.nn.Module):
@@ -270,11 +277,11 @@ class TransformerLanguageModel(torch.nn.Module):
         self.lm_head = Linear(d_model, vocab_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """ Returns a batched, normalized probability distribution over the vocabulary where
+        """Returns a batched, normalized probability distribution over the vocabulary where
         the predicted distribution is over the next word for each input token.
         """
         # x: (batch_size, context_length)
-        e= self.token_embeddings(x)
+        e = self.token_embeddings(x)
         # e: (batch_size, context_length, d_model)
         attn = self.layers(e)
         # attn: (batch_size, context_length, d_model)
@@ -283,4 +290,3 @@ class TransformerLanguageModel(torch.nn.Module):
         y = self.lm_head(attn_normalized)
         # y: (batch_size, context_length, vocab_size)
         return y
-
