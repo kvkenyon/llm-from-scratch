@@ -10,7 +10,6 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from llm.nn import (
-    AdamW,
     CausalMultiHeadAttention,
     Embedding,
     Linear,
@@ -20,11 +19,11 @@ from llm.nn import (
     TransformerBlock,
     TransformerLanguageModel,
     cross_entropy,
-    lr_cosine_schedule,
     scaled_dot_product_attention,
     silu,
     softmax,
 )
+from llm.optim import AdamW, gradient_clipping, lr_cosine_schedule
 from llm.tokenizer import Tokenizer, tokenize
 
 
@@ -505,7 +504,7 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    gradient_clipping(parameters, max_l2_norm)
 
 
 def get_adamw_cls() -> Any:
