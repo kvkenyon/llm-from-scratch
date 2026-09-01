@@ -20,6 +20,7 @@ from llm.nn import (
     TransformerBlock,
     TransformerLanguageModel,
     cross_entropy,
+    lr_cosine_schedule,
     scaled_dot_product_attention,
     silu,
     softmax,
@@ -539,7 +540,7 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    return lr_cosine_schedule(it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters)
 
 
 def run_save_checkpoint(

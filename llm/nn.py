@@ -28,6 +28,20 @@ def cross_entropy(inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     return -torch.mean(log_probs)
 
 
+def lr_cosine_schedule(
+    it: int, max_learning_rate: float, min_learning_rate: float, warmup_iters: int, cosine_cycle_iters: int
+) -> float:
+    if it < warmup_iters:
+        return (it * max_learning_rate) / warmup_iters
+
+    if it <= cosine_cycle_iters:
+        return min_learning_rate + 0.5 * (
+            1 + math.cos(((it - warmup_iters) / (cosine_cycle_iters - warmup_iters)) * math.pi)
+        ) * (max_learning_rate - min_learning_rate)
+
+    return min_learning_rate
+
+
 def scaled_dot_product_attention(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, m: torch.Tensor | None = None
 ) -> torch.Tensor:
