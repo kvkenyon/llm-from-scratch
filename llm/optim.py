@@ -19,18 +19,15 @@ def lr_cosine_schedule(
 
 
 def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
-    """
-    Given the gradient (for all parameters) 𝑔, we compute its ℓ2 -norm ‖𝑔‖2 . If this norm is less than a
-    maximum value 𝑀 , then we leave 𝑔 as is; otherwise, we scale 𝑔 down by a factor of ‖𝑔‖𝑀+𝜀 (where a small
-    𝜀, like 10−6 , is added for numeric stability). Note that the resulting norm will be just under 𝑀 .
-    """
-    g_l2_norm = sum(torch.sum(p.grad**2) for p in parameters if p.grad is not None)
+    g_l2_norm = torch.sqrt(torch.sum(torch.cat([p.grad.view(-1) for p in parameters if p.grad is not None])))
     if g_l2_norm < max_l2_norm:
         return
-    for p in parameters:
-        if p.grad is None:
-            continue
-        p.grad *= max_l2_norm / (g_l2_norm + 1e-6)
+    scale = max_l2_norm / (g_l2_norm + 1e-6)
+    with torch.no_grad():
+        for p in parameters:
+            if p.grad is None:
+                continue
+            p.grad.mul_(scale)
 
 
 class SGD(torch.optim.Optimizer):
